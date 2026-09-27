@@ -1,0 +1,74 @@
+# Render blueprint for the SENTRA AI backend (FastAPI).
+#
+# The user only ever opens the Vercel URL. This service is internal: the
+# frontend's server-side proxy calls it, so no backend hostname or secret is
+# exposed to the browser.
+#
+# Deploy:  render blueprint launch  (or "New > Blueprint" in the dashboard)
+# Then set SUPABASE_* in the dashboard and copy the resulting URL into the
+# Vercel project's SENTRA_API_URL environment variable.
+
+services:
+  - type: web
+    name: sentra-api
+    runtime: python
+    plan: starter # a paid plan avoids the free tier's 512MB RAM limit
+    region: oregon
+    healthCheckPath: /health
+    # Single worker: the service graph is process-local (scikit-learn models and
+    # the Chroma client). Scale with more instances, not more workers.
+    numInstances: 1
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: >-
+      uvicorn sentinel.api.server:app
+      --host 0.0.0.0
+      --port $PORT
+      --timeout-keep-alive 65
+      --no-access-log
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: PYTHONUNBUFFERED
+        value: "1"
+
+      # --- persistence ---------------------------------------------------
+      # Supabase is the production store. Paste the values from your Supabase
+      # project settings. SUPABASE_SERVICE_KEY is the service_role key and is
+      # required for writes, since the anon key cannot insert telemetry.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+
+      # --- AI (optional) --------------------------------------------------
+      # Without these the investigator falls back to a deterministic analyser,
+      # so the app is fully functional but summaries are not model-generated.
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        value: gpt-4o-mini
+
+      # --- behaviour ------------------------------------------------------
+      # Turn demo seeding off once real devices report in.
+      - key: DEMO_MODE
+        value: "true"
+      - key: ENABLE_LOCAL_STORE
+        value: "true"
+      - key: SENTINEL_DATA_DIR
+        value: /var/data
+      # Pin telemetry to one device so a multi-tenant Supabase project does not
+      # mix machines together. Optional.
+      - key: SENTINEL_DEVICE_ID
+        sync: false
+
+      # CORS is off by default because the browser is same-origin via the
+      # Next.js proxy. Add explicit origins only if you call the API directly.
+      # - key: SENTRA_CORS_ORIGINS
+      #   sync: false
+
+    disk:
+      name: sentra-data
+      mountPath: /var/data
+      sizeGB: 1

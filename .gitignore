@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Secrets and local environment
+.env
+.env.local
+.env.*.local
+
+# Local database and runtime data
+data/*.db
+data/*.db-journal
+data/*.sqlite3
+*.log
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+build/
+*.tsbuildinfo
+
+# Tooling scratch
+.DS_Store
+Thumbs.db

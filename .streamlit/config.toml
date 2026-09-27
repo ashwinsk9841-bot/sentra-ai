@@ -1,0 +1,100 @@
+# Sentinel AI - dark operations theme.
+#
+# Everything visual is configured here rather than with injected CSS, so the
+# app keeps working across Streamlit upgrades. Colours are chosen for WCAG AA
+# contrast on the dark canvas, and the categorical chart palette is ordered
+# most-important-first (risk, then the core resource metrics).
+
+[theme]
+base = "dark"
+primaryColor = "#4F8CFF"
+backgroundColor = "#0B0F17"
+secondaryBackgroundColor = "#141B26"
+textColor = "#E6EDF7"
+
+codeTextColor = "#C9D6E8"
+codeBackgroundColor = "#0F1620"
+borderColor = "#233044"
+linkColor = "#6FA8FF"
+
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "10px"
+buttonRadius = "10px"
+
+font = "sans-serif"
+codeFont = "monospace"
+baseFontSize = 15
+baseFontWeight = 400
+codeFontSize = "13px"
+headingFontSizes = ["30px", "22px", "18px", "16px", "14px", "12px"]
+headingFontWeights = [600, 600, 600, 600, 500, 500]
+linkUnderline = false
+
+# Status palette
+redColor = "#FF5C6C"
+orangeColor = "#FF9F45"
+yellowColor = "#F5D24B"
+greenColor = "#3DD68C"
+blueColor = "#4F8CFF"
+violetColor = "#A78BFA"
+grayColor = "#7C8AA0"
+
+redBackgroundColor = "#2A1419"
+orangeBackgroundColor = "#2A1D10"
+yellowBackgroundColor = "#272312"
+greenBackgroundColor = "#0F2620"
+blueBackgroundColor = "#111C2E"
+violetBackgroundColor = "#1B1730"
+grayBackgroundColor = "#161C26"
+
+redTextColor = "#FF8B96"
+orangeTextColor = "#FFB870"
+yellowTextColor = "#F7DE8A"
+greenTextColor = "#6FE3B4"
+blueTextColor = "#8FBEFF"
+violetTextColor = "#C4B1FF"
+grayTextColor = "#9AA7B8"
+
+dataframeBorderColor = "#233044"
+dataframeHeaderBackgroundColor = "#141B26"
+
+# Charts: risk colours first, then the core metrics in a stable order.
+chartCategoricalColors = [
+    "#4F8CFF",
+    "#FF5C6C",
+    "#3DD68C",
+    "#F5D24B",
+    "#A78BFA",
+    "#FF9F45",
+    "#22D3EE",
+    "#F472B6",
+    "#94A3B8",
+]
+chartSequentialColors = [
+    "#0B1220",
+    "#12203A",
+    "#16305A",
+    "#1B4079",
+    "#20509B",
+    "#2A66C4",
+    "#4F8CFF",
+    "#7FB0FF",
+    "#A9CBFF",
+    "#D6E6FF",
+]
+
+[theme.sidebar]
+backgroundColor = "#0E141E"
+secondaryBackgroundColor = "#161E2A"
+codeBackgroundColor = "#0F1620"
+textColor = "#DCE6F5"
+borderColor = "#1E2A3C"
+primaryColor = "#4F8CFF"
+
+[server]
+headless = true
+runOnSave = true
+
+[browser]
+gatherUsageStats = false

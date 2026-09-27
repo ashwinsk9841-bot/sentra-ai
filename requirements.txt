@@ -1,0 +1,43 @@
+# SENTRA AI backend runtime dependencies.
+#
+# Install with:  pip install -r requirements.txt
+#
+# The frontend (frontend/package.json) is a separate install:  cd frontend && npm install
+#
+# Note: versions are lower-bounded to the minor series that are verified
+# against this codebase rather than pinned to exact patches, so security
+# updates flow in without breaking the build.
+
+# --- Web layer -----------------------------------------------------------
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+pydantic>=2.7,<3.0
+python-dotenv>=1.0,<2.0
+
+# --- Data ---------------------------------------------------------------
+pandas>=2.2
+numpy>=1.26
+
+# --- ML (anomaly detection, risk scoring) --------------------------------
+scikit-learn>=1.4
+scipy>=1.13
+joblib>=1.3
+
+# --- Persistence ---------------------------------------------------------
+# Supabase is the production store. Local SQLite is used automatically when
+# Supabase credentials are absent, so the same code runs in development.
+supabase>=2.7,<3.0
+
+# --- RAG / embeddings ----------------------------------------------------
+chromadb>=0.5
+
+# --- Telemetry agent -----------------------------------------------------
+psutil>=6.0
+
+# --- Document parsing ----------------------------------------------------
+pypdf>=4.2
+
+# --- Optional: LLM-backed investigation ----------------------------------
+# The investigator runs without a key using a deterministic analyser, so this
+# is only needed for model-backed summaries. Set LLM_API_KEY at runtime.
+# httpx>=0.27
