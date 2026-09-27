@@ -1,73 +1,120 @@
-# Render blueprint for the SENTRA AI backend (FastAPI).
+# =============================================================================
+# SENTRA AI - Render blueprint: ONE Web Service, ONE container, ONE URL.
 #
-# The user only ever opens the Vercel URL. This service is internal: the
-# frontend's server-side proxy calls it, so no backend hostname or secret is
-# exposed to the browser.
+# The Next.js frontend and the FastAPI backend are built into a single image
+# (see Dockerfile) and served by one process tree. Only Next.js binds the
+# public port; FastAPI stays on an internal loopback port and is reached
+# server-side by the existing frontend/src/app/api/[...path] route handler.
 #
-# Deploy:  render blueprint launch  (or "New > Blueprint" in the dashboard)
-# Then set SUPABASE_* in the dashboard and copy the resulting URL into the
-# Vercel project's SENTRA_API_URL environment variable.
+#   https://sentra-ai.onrender.com/        -> Next.js UI
+#   https://sentra-ai.onrender.com/api/*   -> FastAPI backend
+#
+# The browser is same-origin, so no backend hostname, no internal port and no
+# secret is ever exposed to the client.
+#
+# Deploy:  render blueprint launch   (or New > Blueprint in the dashboard)
+# =============================================================================
 
 services:
   - type: web
-    name: sentra-api
-    runtime: python
-    plan: starter # a paid plan avoids the free tier's 512MB RAM limit
+    name: sentra-ai
+    runtime: docker          # the image is defined by ./Dockerfile
+    plan: starter            # a paid plan avoids the free tier's 512MB RAM cap
     region: oregon
-    healthCheckPath: /health
-    # Single worker: the service graph is process-local (scikit-learn models and
-    # the Chroma client). Scale with more instances, not more workers.
     numInstances: 1
-    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
-    startCommand: >-
-      uvicorn sentinel.api.server:app
-      --host 0.0.0.0
-      --port $PORT
-      --timeout-keep-alive 65
-      --no-access-log
+
+    # --- Docker build ------------------------------------------------------ #
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # No buildCommand: the Dockerfile performs the npm ci + next build and the
+    # pip install itself. Setting one would be ignored for a Docker runtime.
+    #
+    # No startCommand either: the image's CMD is `python scripts/docker_start.py`,
+    # which starts both processes. CMD is overridable from the dashboard if needed.
+
+    # --- Health ------------------------------------------------------------ #
+    # Served by Next.js and forwarded to FastAPI, so it verifies the whole chain
+    # (public port -> proxy -> backend) rather than just the frontend.
+    healthCheckPath: /api/health
+
+    # --- Environment ------------------------------------------------------- #
     envVars:
-      - key: PYTHON_VERSION
-        value: "3.12.7"
+      # The public port. Render sets PORT automatically; the app binds whatever
+      # it receives and never hardcodes a value.
+      - key: NODE_VERSION
+        value: "22"
       - key: PYTHONUNBUFFERED
         value: "1"
 
-      # --- persistence ---------------------------------------------------
-      # Supabase is the production store. Paste the values from your Supabase
-      # project settings. SUPABASE_SERVICE_KEY is the service_role key and is
-      # required for writes, since the anon key cannot insert telemetry.
+      # Internal FastAPI port. Never published; used only inside the container.
+      - key: SENTRA_API_PORT
+        value: "8000"
+      # Server-side only. Not NEXT_PUBLIC_, so it is never inlined into the
+      # browser bundle. Inside one container the backend IS loopback, and the
+      # browser never sees this value because the proxy runs on the server.
+      - key: SENTRA_API_URL
+        value: "http://127.0.0.1:8000"
+
+      # --- Persistence: Supabase (production) ----------------------------- #
+      # Paste from your Supabase project settings. Values matching "your-*"
+      # are treated as unset, so the app falls back to the local store instead
+      # of crashing if these are still placeholders.
       - key: SUPABASE_URL
         sync: false
+      # anon key
       - key: SUPABASE_KEY
         sync: false
+      # service_role key. REQUIRED for writes (telemetry ingest, investigations):
+      # the anon key cannot insert because row level security is enabled.
+      # This is server-side only and is never exposed to the browser.
       - key: SUPABASE_SERVICE_KEY
         sync: false
 
-      # --- AI (optional) --------------------------------------------------
-      # Without these the investigator falls back to a deterministic analyser,
-      # so the app is fully functional but summaries are not model-generated.
+      # --- AI (optional) --------------------------------------------------- #
+      # Without these the investigator uses the deterministic analyser, so every
+      # feature still works; only model-generated summaries are unavailable.
       - key: LLM_API_KEY
         sync: false
       - key: LLM_MODEL
         value: gpt-4o-mini
+      - key: LLM_BASE_URL
+        value: https://api.openai.com/v1
 
-      # --- behaviour ------------------------------------------------------
+      # --- RAG embeddings (optional) -------------------------------------- #
+      # Unset -> the offline lexical embedder, which still indexes and retrieves.
+      - key: EMBEDDING_API_KEY
+        sync: false
+      - key: EMBEDDING_MODEL
+        value: text-embedding-3-small
+
+      # --- Behaviour -------------------------------------------------------- #
       # Turn demo seeding off once real devices report in.
       - key: DEMO_MODE
         value: "true"
+      # Safety net: if Supabase is unreachable, keep serving from local storage
+      # rather than returning errors.
       - key: ENABLE_LOCAL_STORE
         value: "true"
       - key: SENTINEL_DATA_DIR
         value: /var/data
-      # Pin telemetry to one device so a multi-tenant Supabase project does not
-      # mix machines together. Optional.
+      # Pin telemetry to a single device so a multi-tenant Supabase project does
+      # not mix machines together. Optional.
       - key: SENTINEL_DEVICE_ID
         sync: false
+      - key: MONITOR_INTERVAL
+        value: 5s
+      - key: ALERT_RISK_THRESHOLD
+        value: "31"
 
-      # CORS is off by default because the browser is same-origin via the
-      # Next.js proxy. Add explicit origins only if you call the API directly.
+      # CORS is intentionally NOT enabled: the browser is same-origin via the
+      # Next.js proxy, so no cross-origin request is ever made. Only set
+      # SENTRA_CORS_ORIGINS if you deliberately call the API from another origin.
       # - key: SENTRA_CORS_ORIGINS
       #   sync: false
 
+    # --- Persistent disk ---------------------------------------------------- #
+    # Holds the local SQLite store, the Chroma vector index and ingested
+    # documents. Safe to delete if you rely solely on Supabase.
     disk:
       name: sentra-data
       mountPath: /var/data

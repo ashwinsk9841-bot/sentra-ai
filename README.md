@@ -123,38 +123,76 @@ are simply not model-generated. Set `LLM_API_KEY` to enable model-backed answers
 every `jsonb` column, boolean types, foreign-key targets, and that RLS is
 enabled on all telemetry tables.
 
-### 2. Backend
+### 2. Deploy to Render (one service, one URL)
 
-`render.yaml` is a ready Render blueprint:
+The repository builds into a **single container** that runs both processes:
+
+```
+browser -> https://sentra-ai.onrender.com/     ONE public port
+            |- /          -> Next.js 14      (the UI)
+            `- /api/*     -> FastAPI         (internal port 8000, loopback)
+                             -> Supabase
+```
+
+`render.yaml` is a ready blueprint for it:
 
 ```bash
 render blueprint launch
 ```
 
-Set the `SUPABASE_*` values when prompted, then note the resulting URL. The
-blueprint runs a single instance because the service graph is process-local
-(scikit-learn models and the Chroma client); scale with instances, not workers.
+Choose **Web Service**, and:
 
-Railway or Fly work too:
+| Setting | Value |
+| --- | --- |
+| Environment | Docker |
+| Dockerfile path | `./Dockerfile` |
+| Docker context | `.` |
+| Build command | *leave empty* - the Dockerfile builds |
+| Start command | *leave empty* - the image `CMD` starts it |
+| Health check path | `/api/health` |
+| Instance count | 1 |
+
+Render builds the image and publishes only the port named by `$PORT`. FastAPI
+binds an internal port that is never exposed, and the browser stays same-origin,
+so no backend hostname, port or secret reaches the client.
+
+Scaling: run a single instance, because the service graph is process-local
+(scikit-learn models and the Chroma client). Scale with instances, not workers.
+
+Build and run the same image locally:
+
+```bash
+docker build -t sentra-ai .
+docker run --rm -p 10000:10000 --env-file .env -e PORT=10000 sentra-ai
+# open http://localhost:10000
+```
+
+Deploying the two processes to separate hosts also still works: run
+`uvicorn sentinel.api.server:app --host 0.0.0.0 --port $PORT` for the backend and
+set the frontend's `SENTRA_API_URL` to that origin. See section 3.
+
+### 3. Split frontend and backend (optional)
+
+If you prefer two services, deploy the backend on Render/Railway/Fly:
 
 ```bash
 uvicorn sentinel.api.server:app --host 0.0.0.0 --port $PORT
 ```
 
-Health probe: `GET /health` returns `{"ok":true,"status":"healthy","store":...}`.
-
-### 3. Frontend
-
-Import the repository into Vercel. `vercel.json` builds `frontend/` for you, so
-no project settings need changing. Then set one variable:
+and the frontend on Vercel. `vercel.json` builds `frontend/` for you, so no
+project settings need changing. Then set one variable:
 
 | Variable | Value |
 | --- | --- |
 | `SENTRA_API_URL` | the backend origin, e.g. `https://sentra-api.onrender.com` |
 
-`SENTRA_API_URL` is **required** in production. The proxy returns a clear 500
-naming the variable rather than silently falling back to localhost, so a
-misconfigured deploy fails visibly instead of appearing healthy.
+`SENTRA_API_URL` is **required** in production and is read **server-side only** -
+it is never `NEXT_PUBLIC_`, so it is never inlined into the browser bundle. The
+proxy returns a clear 500 naming the variable rather than silently falling back
+to localhost, so a misconfigured deploy fails visibly instead of appearing
+healthy.
+
+Health probe: `GET /health` returns `{"ok":true,"status":"healthy","store":...}`.
 
 ### 4. Connect a device
 

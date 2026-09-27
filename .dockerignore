@@ -1,0 +1,70 @@
+# Keep the Docker build context small and reproducible.
+# Everything needed for the image is copied explicitly by the Dockerfile.
+
+# --- VCS / CI -------------------------------------------------------------
+.git
+.gitignore
+.github
+
+# --- Node / Next.js build output ------------------------------------------
+# Rebuilt inside the image; shipping host artifacts would produce a mismatched
+# .next (wrong platform, stale build id, or a dev build).
+**/node_modules
+**/.next
+**/out
+**/*.tsbuildinfo
+npm-debug.log*
+.npm
+
+# --- Python ----------------------------------------------------------------
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+.venv
+venv
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# --- Secrets: must never enter the image ------------------------------------
+.env
+.env.*
+!.env.example
+frontend/.env*
+!frontend/.env.example
+
+# --- Runtime data / local state ---------------------------------------------
+# Local SQLite store, Chroma index, logs. Render provides these via a disk
+# mounted at SENTINEL_DATA_DIR.
+data/
+*.db
+*.db-journal
+*.sqlite3
+*.log
+dev_launcher.log
+
+# --- Legacy Streamlit tree -------------------------------------------------
+# The container serves the Next.js UI. The old Streamlit app is unused there and
+# would only add a second, competing frontend to the image. It is preserved in
+# the repository and still runs locally.
+.streamlit
+app.py
+pages
+ui
+app_pages
+
+# --- Deployment docs / platform config ---------------------------------------
+# Not needed at runtime; the Dockerfile supplies the runtime configuration.
+render.yaml
+vercel.json
+.vercelignore
+Dockerfile
+.dockerignore
+README.md
+tests
+
+# --- Editor / OS -------------------------------------------------------------
+.vscode
+.idea
+.DS_Store
+Thumbs.db
