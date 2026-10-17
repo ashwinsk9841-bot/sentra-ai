@@ -393,10 +393,38 @@ class LocalRepository(SentinelRepository):
                 "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', ?)",
                 (str(SCHEMA_VERSION),),
             )
+            self._normalise_timestamps()
             self._initialised = True
             log.info("Local store ready at %s", self.db_path)
         except sqlite3.Error as exc:
             raise DatabaseError(f"Could not initialise local store: {exc}") from exc
+
+    _TS_TABLES = (
+        "system_metrics",
+        "network_metrics",
+        "process_snapshots",
+        "logs",
+        "anomalies",
+        "alerts",
+        "risk_events",
+        "system_events",
+    )
+
+    def _normalise_timestamps(self) -> None:
+        """Canonicalise legacy ``'YYYY-MM-DD HH:MM:SS'`` stamps to ISO ``T`` form.
+
+        Rows written by older agents used a space separator; string comparison in
+        windowed queries then sorts them before every ``'T'``-format bound
+        (``' '`` < ``'T'``), silently dropping valid telemetry. New writes are
+        already canonical, so this is a one-time repair that self-noops after.
+        """
+        for table in self._TS_TABLES:
+            try:
+                self._conn.execute(
+                    f"UPDATE {table} SET ts = replace(ts, ' ', 'T') WHERE ts LIKE '% %'"
+                )
+            except sqlite3.Error:
+                continue
 
     def health(self) -> BackendHealth:
         started = time.perf_counter()

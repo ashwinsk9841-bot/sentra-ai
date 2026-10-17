@@ -1,8 +1,8 @@
 {
   "device_id": "sent-87460b9ba9b9",
-  "name": "JARVIS-win32",
-  "authorized": false,
-  "registered_at": null,
+  "name": "MY-PC",
+  "authorized": true,
+  "registered_at": "2026-10-17T10:06:57.256253+00:00",
   "agent_version": "1.0.0",
   "metadata": {}
 }

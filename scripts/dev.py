@@ -45,6 +45,12 @@ BACKEND_URL = os.environ.get("SENTRA_API_URL") or f"http://{BACKEND_HOST}:{BACKE
 IS_WINDOWS = os.name == "nt"
 IS_POSIX = os.name == "posix"
 
+# Local-development ingest key. Without it the mounted agent-ingest API returns
+# 503 and live telemetry can never reach the dashboard. This default is only
+# used for the loopback dev stack; deployments must set a real AGENT_INGEST_KEY.
+_DEFAULT_INGEST_KEY = "local-dev-ingest-key"
+os.environ.setdefault("AGENT_INGEST_KEY", _DEFAULT_INGEST_KEY)
+
 # ANSI colours, disabled when the output is piped or NO_COLOR is set.
 _COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
 

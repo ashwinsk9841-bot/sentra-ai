@@ -107,7 +107,7 @@ class AgentRunner:
         payload = self.identity.registration_payload(
             interval_s=self.settings.agent_update_interval, pairing_code=pairing_code
         )
-        url = backend.endpoint.replace("/ingest", "/devices/register")
+        url = backend.endpoint().replace("/ingest", "/devices/register")
         request = urllib.request.Request(
             url,
             data=json.dumps(payload, default=str).encode("utf-8"),

@@ -22,12 +22,15 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import traceback
 from collections.abc import Callable
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
+
+import pandas as pd
 
 from ..database import get_repository
 from ..database.repository import json_safe
@@ -88,6 +91,8 @@ def _iso(value: Any) -> str | None:
     if value is None:
         return None
     if isinstance(value, datetime):
+        if value != value:  # NaT / NaN-like datetime serialises as null
+            return None
         if value.tzinfo is None:
             value = value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc).isoformat()
@@ -137,7 +142,42 @@ def build_series(mon: Any, device: str | None, window: str) -> dict[str, Any]:
     frame = mon.system_metrics(device, window=window, limit=3000)
     if len(frame) == 0:
         return {"ts": [], "metrics": {}}
-    frame = frame.sort_values("ts")
+    frame = frame.sort_values("ts").reset_index(drop=True)
+
+    # Network throughput is stored per-interface in ``network_metrics``; the
+    # system table has no net columns, so the network tracks would always be
+    # empty. Aggregate every interface per instant and align it onto the system
+    # timeline (nearest sample, same collection cycle) so all metrics share one
+    # timestamp axis for Recharts.
+    try:
+        net = mon.network_metrics(device, window=window, limit=6000)
+    except Exception:  # pragma: no cover - defensive
+        net = None
+    if (
+        net is not None
+        and len(net)
+        and {"ts", "sent_mbps", "recv_mbps"}.issubset(net.columns)
+    ):
+        net = net.copy()
+        # Every interface row in a cycle carries its own microsecond stamp, so a
+        # raw groupby would never sum interfaces together and merge_asof would
+        # then attach one arbitrary (often idle) interface. Floor to the second
+        # so all interfaces of one cycle collapse into a single total.
+        net["ts"] = net["ts"].dt.floor("s")
+        agg = (
+            net.groupby("ts", as_index=False)[["sent_mbps", "recv_mbps"]]
+            .sum()
+            .sort_values("ts")
+            .rename(columns={"sent_mbps": "net_sent_mbps", "recv_mbps": "net_recv_mbps"})
+        )
+        frame = pd.merge_asof(
+            frame,
+            agg,
+            on="ts",
+            direction="nearest",
+            tolerance=pd.Timedelta("60s"),
+        )
+
     metrics: dict[str, list[float | None]] = {}
     for column in (
         "cpu_percent",
@@ -151,7 +191,15 @@ def build_series(mon: Any, device: str | None, window: str) -> dict[str, Any]:
         "process_count",
     ):
         if column in frame.columns:
-            metrics[column] = [None if v is None else float(v) for v in frame[column]]
+            values: list[float | None] = []
+            for v in frame[column]:
+                try:
+                    fv = float(v)
+                except (TypeError, ValueError):
+                    values.append(None)
+                    continue
+                values.append(None if math.isnan(fv) or math.isinf(fv) else fv)
+            metrics[column] = values
     return {"ts": [_iso(v) for v in frame["ts"]], "metrics": metrics}
 
 
@@ -255,9 +303,17 @@ def build_timeline(svc: dict[str, Any], device: str | None, limit: int) -> list[
                 "origin": "system",
             }
         )
-    for row in _records(
-        svc["mon"].risk_events(device, window="7d", limit=limit).sort_values("ts").tail(limit)
-    ):
+    # ``risk_events`` returns an empty frame with no columns when the window has
+    # no risk history yet, so the same empty guard used by ``build_series`` and
+    # ``build_network`` is required here: ``.sort_values("ts")`` on a column-less
+    # frame raises ``KeyError: 'ts'``, which surfaced as HTTP 500 for the whole
+    # dashboard ("Backend unreachable") whenever a device had no risk events.
+    risk_frame = svc["mon"].risk_events(device, window="7d", limit=limit)
+    if len(risk_frame) > 0 and "ts" in risk_frame.columns:
+        risk_frame = risk_frame.sort_values("ts").tail(limit)
+    else:
+        risk_frame = risk_frame.iloc[0:0]
+    for row in _records(risk_frame):
         severity = str(row.get("severity") or "LOW").upper()
         tone = (
             "danger"
@@ -556,7 +612,9 @@ def get_analytics(qs: dict[str, list[str]], body: dict[str, Any]) -> Any:
     return {
         "summary": json_safe(svc["analytics"].summary(device, window=window)),
         "reliability": json_safe(svc["analytics"].reliability(device, window=window)),
-        "correlation": _records(svc["analytics"].metric_correlation(device, window=window)),
+        "correlation": json_safe(
+            svc["analytics"].metric_correlation_rows(device, window=window)
+        ),
         "hourly_profile": _records(svc["analytics"].hourly_profile(device, window=window)),
         "rag_usage": json_safe(svc["analytics"].rag_usage()),
     }
@@ -576,6 +634,46 @@ def get_rag(qs: dict[str, list[str]], body: dict[str, Any]) -> Any:
 def get_documents(qs: dict[str, list[str]], body: dict[str, Any]) -> Any:
     svc = services()
     return {"documents": _records(svc["repo"].list_documents())}
+
+
+def _rag_payload(result: Any) -> dict[str, Any]:
+    """Stable RAG response for the dashboard.
+
+    ``RagResult.as_dict`` nests the generated answer under ``answer`` (a dict of
+    text/provider/confidence), but the RAG Lab reads ``answer`` as a plain string
+    and ``sources`` as the ranked chunk list. This adapter flattens the answer
+    text while preserving every provenance field, so no data is lost.
+    """
+    data = json_safe(result)
+    if not isinstance(data, dict):
+        return {"answer": "", "sources": [], "chunks": []}
+    answer = data.get("answer")
+    if isinstance(answer, dict):
+        text = str(answer.get("text") or "")
+        detail = answer
+    else:
+        text = str(answer or "")
+        detail = {}
+    sources = data.get("sources") or []
+    return {
+        "query": data.get("query"),
+        "answer": text,
+        "answer_detail": detail,
+        "grounded": bool(detail.get("grounded")) if detail else False,
+        "confidence": detail.get("confidence"),
+        "provider": detail.get("provider"),
+        "model": detail.get("model"),
+        "note": detail.get("note") or "",
+        "sources": sources,
+        "chunks": sources,
+        "hit_count": data.get("hit_count", len(sources)),
+        "top_score": data.get("top_score"),
+        "latency_ms": data.get("latency_ms"),
+        "embedder": data.get("embedder"),
+        "store_backend": data.get("store_backend"),
+        "document_id": data.get("document_id"),
+        "top_k": data.get("top_k"),
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -642,14 +740,13 @@ def post_rag_answer(qs: dict[str, list[str]], body: dict[str, Any]) -> Any:
     query = str(body.get("query") or "")
     if not query:
         raise ValueError("query is required")
-    return json_safe(
-        svc["mon"].rag.answer(
-            query,
-            top_k=body.get("top_k"),
-            use_llm=bool(body.get("use_llm", False)),
-            persist=True,
-        )
+    result = svc["mon"].rag.answer(
+        query,
+        top_k=body.get("top_k"),
+        use_llm=bool(body.get("use_llm", False)),
+        persist=True,
     )
+    return _rag_payload(result)
 
 
 def post_rag_retrieve(qs: dict[str, list[str]], body: dict[str, Any]) -> Any:
@@ -657,7 +754,10 @@ def post_rag_retrieve(qs: dict[str, list[str]], body: dict[str, Any]) -> Any:
     query = str(body.get("query") or "")
     if not query:
         raise ValueError("query is required")
-    return json_safe(svc["mon"].rag.retrieve(query, top_k=int(body.get("top_k") or 5), persist=False))
+    result = svc["mon"].rag.retrieve(
+        query, top_k=int(body.get("top_k") or 5), persist=False
+    )
+    return _rag_payload(result)
 
 
 def post_demo_seed(qs: dict[str, list[str]], body: dict[str, Any]) -> Any:

@@ -135,6 +135,52 @@ class AnalyticsService:
         return numeric.corr(numeric_only=True).round(3)
 
     # ------------------------------------------------------------------ #
+    def metric_correlation_rows(
+        self, device_id: str | None = None, *, window: str = "24h", limit: int = 12
+    ) -> list[dict[str, Any]]:
+        """Pairwise Pearson correlation per metric pair, strongest first.
+
+        The dashboard presents this as a flat ``Metric | Pearson r | Samples``
+        table, so the correlation matrix is flattened into one row per metric
+        pair (each row names both metrics). ``samples`` is the number of
+        telemetry rows where both metrics were present, so the number is
+        honest about how much overlap actually backs each coefficient.
+        """
+        target = self.service.resolve_device_id(device_id)
+        since = datetime.now(timezone.utc) - timedelta(minutes=WINDOWS.get(window, 1440))
+        metrics = self.repo.fetch_system_metrics(device_id=target, since=since, limit=20000)
+        if metrics.empty:
+            return []
+        available = [m for m in CORE_METRICS if m in metrics.columns]
+        numeric = metrics[available].apply(pd.to_numeric, errors="coerce")
+
+        rows: list[dict[str, Any]] = []
+        for index, left in enumerate(available):
+            for right in available[index + 1 :]:
+                pair = numeric[[left, right]].dropna()
+                samples = int(len(pair))
+                if samples < 2:
+                    continue
+                # A constant metric has zero variance, so its coefficient is
+                # undefined; skip it rather than emit a NaN and a numpy warning.
+                if pair[left].nunique() < 2 or pair[right].nunique() < 2:
+                    continue
+                coefficient = pair[left].corr(pair[right])
+                if coefficient != coefficient:  # NaN
+                    continue
+                rows.append(
+                    {
+                        "metric": f"{METRIC_LABELS.get(left, left)} ~ {METRIC_LABELS.get(right, right)}",
+                        "metric_a": left,
+                        "metric_b": right,
+                        "correlation": round(float(coefficient), 3),
+                        "samples": samples,
+                    }
+                )
+        rows.sort(key=lambda row: abs(float(row["correlation"])), reverse=True)
+        return rows[: max(1, int(limit))]
+
+    # ------------------------------------------------------------------ #
     def hourly_profile(self, device_id: str | None = None, *, window: str = "24h") -> pd.DataFrame:
         """Average metric value by hour of day (operational rhythm)."""
         target = self.service.resolve_device_id(device_id)

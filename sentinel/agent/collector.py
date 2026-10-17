@@ -140,6 +140,39 @@ def collect_system() -> dict[str, Any]:
     return row
 
 
+def collect_disk_io(
+    previous: dict[str, int] | None, *, interval_s: float = 5.0
+) -> tuple[float, float, dict[str, int]]:
+    """Disk throughput in MB/s derived from cumulative I/O counters.
+
+    Returns ``(read_mbps, write_mbps, counters)``. The first call has no prior
+    counters to difference against, so it reports 0.0 to avoid a fake spike.
+    """
+    if not PSUTIL_AVAILABLE:  # pragma: no cover - degraded mode
+        return 0.0, 0.0, previous or {}
+    try:
+        counters = psutil.disk_io_counters()
+    except Exception:  # pragma: no cover - platform dependent
+        return 0.0, 0.0, previous or {}
+    if counters is None:  # pragma: no cover - platform dependent
+        return 0.0, 0.0, previous or {}
+
+    current = {
+        "read_bytes": int(counters.read_bytes),
+        "write_bytes": int(counters.write_bytes),
+    }
+    if not previous:
+        return 0.0, 0.0, current
+    elapsed = max(0.5, float(interval_s))
+    read_mbps = max(
+        0.0, (current["read_bytes"] - int(previous.get("read_bytes", 0))) / elapsed / 1024**2
+    )
+    write_mbps = max(
+        0.0, (current["write_bytes"] - int(previous.get("write_bytes", 0))) / elapsed / 1024**2
+    )
+    return round(read_mbps, 4), round(write_mbps, 4), current
+
+
 def _handle_count() -> int:
     """Open handles across processes, best effort (Linux only, optional)."""
     try:
@@ -268,6 +301,7 @@ class Collector:
         self.interval_s = float(interval_s)
         self.process_top = int(process_top)
         self._previous_net: dict[str, dict[str, int]] = {}
+        self._previous_disk: dict[str, int] = {}
         self._lock = threading.Lock()
         self._last_sample: Sample | None = None
 
@@ -282,8 +316,19 @@ class Collector:
             network, self._previous_net = collect_network(
                 self._previous_net, interval_s=self.interval_s
             )
+            read_mbps, write_mbps, self._previous_disk = collect_disk_io(
+                self._previous_disk, interval_s=self.interval_s
+            )
+            system["disk_read_mbps"] = read_mbps
+            system["disk_write_mbps"] = write_mbps
             processes = collect_processes(top=self.process_top) if include_processes else []
-            sample = Sample(ts=system["ts"], system=system, network=network, processes=processes)
+            # Stamp every row of this cycle with the system sample's instant so
+            # the system/network/process tables share one timestamp per cycle and
+            # aggregate cleanly on the backend.
+            sample_ts = system["ts"]
+            for row in (*network, *processes):
+                row["ts"] = sample_ts
+            sample = Sample(ts=sample_ts, system=system, network=network, processes=processes)
             self._last_sample = sample
             return sample
 

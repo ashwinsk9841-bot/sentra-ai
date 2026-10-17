@@ -36,6 +36,10 @@ from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse as _JSONResponse
 
+from sentinel.database.repository import json_safe
+
+from .ingest import app as _agent_ingest_app
+
 from .serve import (
     build_dashboard,
     build_network,
@@ -111,7 +115,7 @@ class JSONResponse(_JSONResponse):
 
     def render(self, content: Any) -> bytes:
         return json.dumps(
-            _finite(content),
+            json_safe(content),
             default=str,
             ensure_ascii=False,
             allow_nan=False,
@@ -302,6 +306,14 @@ def create_app() -> FastAPI:
         except Exception as exc:  # pragma: no cover - defensive
             payload = {"ok": True, "status": "degraded", "error": f"{type(exc).__name__}: {exc}"}
         return payload
+
+    # The agent ingest API (``POST /api/v1/ingest`` and
+    # ``POST /api/v1/devices/register``) belongs to the same origin as the
+    # product API: operators point ``AGENT_INGEST_URL`` at this service (see the
+    # README). It is mounted last so every ``/api/*`` product route registered
+    # above takes precedence and the sub-app only ever handles the agent
+    # endpoints, which were previously unreachable (404) under ``:app``.
+    app.mount("/", _agent_ingest_app, name="agent-ingest")
 
     return app
 

@@ -35,13 +35,25 @@ def new_id() -> str:
 
 
 def to_iso(value: Any) -> str | None:
-    """Serialise a datetime (or pass through an ISO string) for storage."""
+    """Serialise a datetime for storage in canonical UTC ISO-8601 form.
+
+    Strings are parsed and re-emitted so every stored timestamp uses the same
+    ``T`` separator and ``+00:00`` offset. Agents legitimately send
+    ``str(datetime)`` (space separator); without normalisation those rows sort
+    before any ``T``-formatted ``since`` bound and were silently dropped from
+    every windowed query, leaving the dashboard's charts empty.
+    """
     if value is None:
         return None
     if isinstance(value, datetime):
+        if value != value:  # NaT / NaN-like datetime serialises as null
+            return None
         if value.tzinfo is None:
             value = value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc).isoformat()
+    parsed = parse_dt(value)
+    if isinstance(parsed, datetime):
+        return parsed.astimezone(timezone.utc).isoformat()
     return str(value)
 
 
@@ -82,6 +94,22 @@ def json_safe(value: Any) -> Any:
         return to_iso(value)
     if isinstance(value, Mapping):
         return {str(k): json_safe(v) for k, v in value.items()}
+    # Prefer a curated as_dict() when the type provides one: it can flatten or
+    # rename fields for the API (e.g. RagResult exposes compact ``sources`` and
+    # ``hit_count`` rather than raw chunk dataclasses).
+    as_dict = getattr(value, "as_dict", None)
+    if callable(as_dict):
+        try:
+            return json_safe(as_dict())
+        except Exception:
+            pass
+    # Handle dataclasses (including ones without as_dict)
+    try:
+        from dataclasses import is_dataclass, asdict
+        if is_dataclass(value) and not isinstance(value, type):
+            return json_safe(asdict(value))
+    except Exception:
+        pass
     if isinstance(value, (list, tuple, set)):
         return [json_safe(v) for v in value]
     if isinstance(value, (pd.Series,)):
@@ -164,7 +192,13 @@ def frame(rows: Iterable[Mapping[str, Any]] | None) -> pd.DataFrame:
         return pd.DataFrame()
     frame_ = pd.DataFrame(records)
     if "ts" in frame_.columns:
-        frame_["ts"] = pd.to_datetime(frame_["ts"], utc=True, errors="coerce")
+        # Canonicalise space-format to T-format first: pandas 3.x mixed-format
+        # parsing coerces to NaT when a space-separated string is mixed with
+        # T-separated ones in the same column.
+        ts_col = frame_["ts"]
+        if not pd.api.types.is_datetime64_any_dtype(ts_col):
+            ts_col = ts_col.astype(str).str.replace(" ", "T", regex=False)
+        frame_["ts"] = pd.to_datetime(ts_col, utc=True, errors="coerce")
         frame_ = frame_.sort_values("ts", kind="stable").reset_index(drop=True)
     return frame_
 

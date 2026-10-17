@@ -115,16 +115,18 @@ COPY --from=backend-deps /usr/local/lib/python3.12/site-packages /usr/local/lib/
 COPY --from=backend-deps /usr/local/bin /usr/local/bin
 
 # --- Backend source ----------------------------------------------------------
-# These are the only Python packages the ASGI app imports. The legacy Streamlit
-# tree (app.py, pages/, ui/, app_pages/) is intentionally not shipped: the
-# Docker image serves the Next.js UI, and keeping it out of the image avoids
-# two competing frontends.
+# The entire backend lives in the `sentinel` package (imported as
+# `sentinel.api.server:app`). Its subpackages - sentinel.agent, sentinel.ai,
+# sentinel.ml, sentinel.rag, sentinel.database, sentinel.services - ship inside
+# that single directory.
+#
+# The legacy Streamlit tree (app.py, pages/, ui/, app_pages/ and the unused
+# sentinel/ui modules) is intentionally not shipped: the Docker image serves the
+# Next.js UI, and keeping it out of the image avoids two competing frontends.
+# The old top-level `agent/ ai/ ml/ rag/ database/` directories are no longer
+# tracked in git, so they must not be COPYed here - a fresh clone has no such
+# paths and the build would fail with "COPY failed: file not found".
 COPY sentinel/ ./sentinel/
-COPY agent/    ./agent/
-COPY ai/       ./ai/
-COPY ml/       ./ml/
-COPY rag/      ./rag/
-COPY database/ ./database/
 
 # --- Next.js runtime (built in stage 1) --------------------------------------
 # node_modules and .next come from the builder, so the final image contains no
